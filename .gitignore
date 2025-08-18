@@ -137,4 +137,4 @@ poetry.lock
 # Celery
 celerybeat-schedule
 celerybeat.pid
-n
+n.env.*
