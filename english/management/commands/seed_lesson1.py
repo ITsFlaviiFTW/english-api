@@ -3,7 +3,6 @@ from english.models import Category, Lesson
 
 # JSON data for Lesson 1
 L1 = {
-    {
   "category_slug": "around-the-house",
   "unit_number": 1,
   "lesson_number": 1,
@@ -341,7 +340,6 @@ L1 = {
   ]
 }
 
-}
 
 class Command(BaseCommand):
     help = "Seed Around the House → Unit 1 → Lesson 1"
