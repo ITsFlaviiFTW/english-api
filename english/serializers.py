@@ -3,8 +3,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+from .models import Category, Lesson
 
 User = get_user_model()
+
 
 class UserSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
@@ -20,6 +22,7 @@ class UserSerializer(serializers.ModelSerializer):
     def get_avatar_url(self, obj):
         return ""
 
+
 class RegisterSerializer(serializers.Serializer):
     username = serializers.CharField()
     email = serializers.EmailField(required=False, allow_blank=True)
@@ -31,12 +34,10 @@ class RegisterSerializer(serializers.Serializer):
         return v
 
     def validate(self, attrs):
-        # Build a transient user for similarity checks (not saved)
         candidate = User(username=attrs.get("username", ""), email=attrs.get("email", ""))
         try:
             validate_password(attrs["password"], user=candidate)
         except DjangoValidationError as e:
-            # Attach messages to the password field
             raise serializers.ValidationError({"password": list(e.messages)})
         return attrs
 
@@ -48,20 +49,19 @@ class RegisterSerializer(serializers.Serializer):
         )
 
 
-
 # --- Catalog serializers -----------------------------------------------------
-from rest_framework import serializers
-from .models import Category, Lesson
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = ["id", "slug", "title", "description", "emoji", "completion_percentage"]
 
+
 class LessonListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lesson
         fields = ["id", "title", "difficulty", "category", "word_count"]
+
 
 class LessonDetailSerializer(serializers.ModelSerializer):
     body_md = serializers.SerializerMethodField()
@@ -75,12 +75,10 @@ class LessonDetailSerializer(serializers.ModelSerializer):
     def get_body_md(self, obj: Lesson) -> str:
         c = obj.content or {}
         parts = []
-        # examples -> simple markdown bullets
         ex = c.get("examples") or []
         if ex:
             lines = [f"- {e.get('en','')} — *{e.get('ro','')}*" for e in ex[:6]]
             parts.append("### Examples\n" + "\n".join(lines))
-        # micro_grammar -> brief section
         mg = c.get("micro_grammar") or {}
         if mg:
             topic = mg.get("topic") or "Grammar"
@@ -109,14 +107,14 @@ class LessonDetailSerializer(serializers.ModelSerializer):
             if t == "choose":
                 out.append({
                     "id": qid,
-                    "prompt": it.get("prompt_en",""),
+                    "prompt": it.get("prompt_en", ""),
                     "qtype": "mcq",
                     "payload": {"options": it.get("options") or []},
                 })
             elif t == "fill_blank":
                 out.append({
                     "id": qid,
-                    "prompt": it.get("prompt_en",""),
+                    "prompt": it.get("prompt_en", ""),
                     "qtype": "fill",
                     "payload": {"blanks": 1},
                 })
@@ -126,12 +124,12 @@ class LessonDetailSerializer(serializers.ModelSerializer):
             elif t == "dialogue_reply":
                 out.append({
                     "id": qid,
-                    "prompt": it.get("prompt_en",""),
+                    "prompt": it.get("prompt_en", ""),
                     "qtype": "mcq",
                     "payload": {"options": it.get("options") or []},
                 })
             elif t == "tf":
-                out.append({"id": qid, "prompt": it.get("prompt_en",""), "qtype": "tf", "payload": {}})
+                out.append({"id": qid, "prompt": it.get("prompt_en", ""), "qtype": "tf", "payload": {}})
             else:
                 continue
             qid += 1

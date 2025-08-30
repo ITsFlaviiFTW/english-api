@@ -60,14 +60,14 @@ L1 = {
       "pron_tip": "Say 'bed' + 'room' clearly."
     },
     {
-      "en": "sofa",
+      "en": "couch",
       "ro": "canapea",
       "pos": "noun",
-      "ipa": "/ˈsoʊ.fə/",
-      "chunks": ["on the sofa", "sofa cushions"],
-      "example_en": "Sit on the sofa.",
+      "ipa": "/kouCH/",
+      "chunks": ["on the couch", "couch cushions"],
+      "example_en": "Sit on the couch.",
       "example_ro": "Stai pe canapea.",
-      "pron_tip": "Use 'on' the sofa (pe)."
+      "pron_tip": "Use 'on' the couch (pe)."
     },
     {
       "en": "table",

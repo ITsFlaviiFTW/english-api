@@ -17,6 +17,7 @@ from .serializers import RegisterSerializer, UserSerializer
 
 class HealthView(APIView):
     permission_classes = [AllowAny]
+
     def get(self, _):
         return Response({"ok": True})
 
@@ -28,6 +29,7 @@ def _tokens_for_user(user):
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
+
     def post(self, request):
         s = RegisterSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -41,6 +43,7 @@ class RegisterView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+
     def post(self, request):
         username = request.data.get("username", "")
         password = request.data.get("password", "")
@@ -53,6 +56,7 @@ class LoginView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
+
     def get(self, request):
         return Response(UserSerializer(request.user).data)
 
@@ -64,8 +68,8 @@ class MeSummaryView(APIView):
         user = request.user
 
         LessonProgress = apps.get_model("english", "LessonProgress", require_ready=False)
-        QuizAttempt    = apps.get_model("english", "QuizAttempt",    require_ready=False)
-        XpEvent        = apps.get_model("english", "XpEvent",        require_ready=False)
+        QuizAttempt = apps.get_model("english", "QuizAttempt", require_ready=False)
+        XpEvent = apps.get_model("english", "XpEvent", require_ready=False)
 
         completed_lessons = 0
         accuracy = 0
@@ -88,7 +92,7 @@ class MeSummaryView(APIView):
         if XpEvent:
             xp = XpEvent.objects.filter(user=user).aggregate(total=Coalesce(Sum("amount"), 0)).get("total") or 0
         else:
-            xp = correct_q * 10  # fallback
+            xp = correct_q * 10
 
         level = 1 + xp // 100
 
