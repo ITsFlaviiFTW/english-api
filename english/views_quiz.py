@@ -1,4 +1,7 @@
+# english/views_quiz.py
 import random
+import re
+import unicodedata
 from typing import Any, Dict, List, Tuple
 
 from django.db import transaction
@@ -10,24 +13,20 @@ from rest_framework import status
 
 from .models import Lesson, QuizAttempt, XpEvent
 
-import re
-import unicodedata
-
-
+# ---------- normalization helpers ----------
 
 _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^\w\s]")  # remove punctuation except letters/digits/space
 
 def strip_diacritics(s: str) -> str:
-    # NFD split + drop combining marks; covers Romanian safely
     if not isinstance(s, str):
         s = str(s or "")
     nfd = unicodedata.normalize("NFD", s)
     no_marks = "".join(ch for ch in nfd if not unicodedata.combining(ch))
-    # map Romanian special letters that aren’t combining-based in some fonts
     return (
         no_marks
-        .replace("ș", "s").replace("Ş", "S").replace("ț", "t").replace("Ţ", "T")
+        .replace("ș", "s").replace("Ş", "S").replace("Ș", "S")
+        .replace("ț", "t").replace("Ţ", "T").replace("Ț", "T")
         .replace("ă", "a").replace("Ă", "A")
         .replace("â", "a").replace("Â", "A")
         .replace("î", "i").replace("Î", "I")
@@ -36,39 +35,71 @@ def strip_diacritics(s: str) -> str:
 def norm_text(s: str) -> str:
     s = strip_diacritics(s or "")
     s = s.lower().strip()
-    s = _PUNCT_RE.sub(" ", s)      # remove punctuation
-    s = _WS_RE.sub(" ", s)         # collapse whitespace
+    s = _PUNCT_RE.sub(" ", s)
+    s = _WS_RE.sub(" ", s)
     return s
 
-
-
+def _normalize_type(t: str) -> str:
+    t = (t or "").lower()
+    if t in ("choose", "dialogue_reply", "mcq"):
+        return "mcq"
+    if t in ("tf", "true_false"):
+        return "tf"
+    if t in ("fill_blank", "fill"):
+        return "fill"
+    if t in ("translate_ro_en", "translate_en_ro", "word_order", "build"):
+        return "build"
+    return t
 
 def _extract_quiz_items(lesson: Lesson) -> List[Dict[str, Any]]:
-    """
-    Expect lesson.content["quiz"]["items"] list.
-    """
     content = lesson.content or {}
     quiz = content.get("quiz") or {}
-    items = quiz.get("items") or []
-    return items
+    return quiz.get("items") or []
 
+def _expected_texts(item: Dict[str, Any]) -> List[str]:
+    vals: List[str] = []
+    # primary fields
+    for k in ("answer_en", "answer_ro", "answer", "expected", "solution"):
+        v = item.get(k)
+        if isinstance(v, str) and v:
+            vals.append(v)
+    # alternates
+    for k in ("answers", "accept", "accept_en", "answer_variants"):
+        v = item.get(k)
+        if isinstance(v, list):
+            vals.extend([x for x in v if isinstance(x, str) and x])
+    # normalize & dedupe
+    out, seen = [], set()
+    for s in vals:
+        ns = norm_text(s)
+        if ns and ns not in seen:
+            seen.add(ns)
+            out.append(ns)
+    return out
+
+def _tokens_to_text(selected: Dict[str, Any]) -> str:
+    """
+    Frontend may send:
+      - {"tokens": ["There", "is", "a", "lamp", "on", "the", "table", "."]}
+      - or {"text": "There is a lamp on the table."}
+    Convert tokens to a single string when present.
+    """
+    toks = selected.get("tokens")
+    if isinstance(toks, list) and toks:
+        return " ".join(str(t) for t in toks)
+    return selected.get("text") or ""
 
 def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
-    t = (item.get("type") or "").lower()
+    t = _normalize_type(item.get("type"))
 
-    # normalize aliases
-    if t == "choose":
-        t = "mcq"
-    if t == "fill_blank":
-        # these can be MCQ if options exist; otherwise it's free text
-        t = "mcq" if item.get("options") else "fill"
-
-    # ---------- MCQ ----------
-    if t in ("mcq", "dialogue_reply"):
-        # selected is {"index": int}
-        correct_idx = item.get("correct_index")
+    # MCQ
+    if t == "mcq":
+        correct_idx = (
+            item.get("correct_index")
+            if item.get("correct_index") is not None
+            else None
+        )
         if correct_idx is None:
-            # allow seeds that store a 'correct' option text instead of index
             options = item.get("options") or []
             correct_text = item.get("correct")
             if correct_text is not None and correct_text in options:
@@ -78,9 +109,8 @@ def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
         except Exception:
             return False
 
-    # ---------- True/False ----------
-    if t in ("tf", "true_false"):
-        # selected is {"value": bool}
+    # True/False
+    if t == "tf":
         correct = item.get("correct_bool")
         if correct is None:
             correct = item.get("answer_bool")
@@ -88,31 +118,30 @@ def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
             correct = item.get("correct")
         return bool(selected.get("value")) is bool(correct)
 
-    # ---------- Free text fill ----------
+    # Fill (free text)
     if t == "fill":
-        # selected is {"text": str}
+        # selected: {"text": "..."}
         ans = item.get("answer")
         answers = item.get("answers") or ([] if ans is None else [ans])
         accept = item.get("accept") or []
-        normalized_expected = [norm_text(a) for a in (answers + accept) if a]
-        user_text = norm_text(selected.get("text") or "")
-        return user_text in normalized_expected
+        expected_norms = [norm_text(a) for a in (answers + accept) if a]
+        cand = norm_text(selected.get("text") or "")
+        return cand in expected_norms
 
-    if t in ("translate_ro_en", "translate_en_ro", "word_order"):
-        expected = (
-            item.get("answer_en")
-            or item.get("answer_ro")
-            or item.get("answer")
-            or item.get("expected")
-        )
-        accept = item.get("accept") or []
-        user_text = norm_text(selected.get("text") or "")
-        normalized_expected = [norm_text(expected or "")]
-        normalized_expected += [norm_text(a) for a in accept]
-        return user_text in normalized_expected
+    # Build / Translate / Word-order (tile UI or free text)
+    if t == "build":
+        # Accept tokens or text
+        cand_raw = _tokens_to_text(selected)
+        cand_norm = norm_text(cand_raw)
+        if not cand_norm:
+            return False
+        expected_norms = _expected_texts(item)
+        return cand_norm in expected_norms
 
+    # Unknown type -> mark incorrect
     return False
 
+# ---------- views ----------
 
 class QuizAttemptView(APIView):
     permission_classes = [IsAuthenticated]
@@ -121,11 +150,12 @@ class QuizAttemptView(APIView):
     def post(self, request):
         """
         Input:
-          { lesson_id: int,
-            answers: [ {question_id:int, selected:{...}} ]
+          {
+            "lesson_id": int,
+            "answers": [ { "question_id": int, "selected": {...} } ]
           }
         Output:
-          { score_pct, xp_delta, results:[{question_id,is_correct}] }
+          { "score_pct": int, "xp_delta": int, "results": [{question_id,is_correct}] }
         """
         lesson_id = request.data.get("lesson_id")
         answers = request.data.get("answers") or []
@@ -138,29 +168,25 @@ class QuizAttemptView(APIView):
         if not items:
             return Response({"detail": "Lesson has no quiz items"}, status=status.HTTP_400_BAD_REQUEST)
 
-        results = []
-        correct = 0
-        total = 0
-
-        item_by_id: Dict[int, Dict[str, Any]] = {}
-        for idx, it in enumerate(items, start=1):
-            item_by_id[idx] = it
-
+        # Index answers by qid
+        ans_by_id: Dict[int, Dict[str, Any]] = {}
         for a in answers:
-            qid = a.get("question_id")
-            sel = a.get("selected") or {}
-            it = item_by_id.get(int(qid)) if qid is not None else None
-            if it is None:
+            try:
+                ans_by_id[int(a.get("question_id"))] = a
+            except Exception:
                 continue
-            is_correct = _grade_answer(it, sel)
-            results.append({"question_id": int(qid), "is_correct": bool(is_correct)})
-            total += 1
-            if is_correct:
-                correct += 1
 
-        if total == 0:
-            total = len(items)
-            results = [{"question_id": i, "is_correct": False} for i in range(1, total + 1)]
+        results: List[Dict[str, Any]] = []
+        correct = 0
+        total = len(items)
+
+        # Grade in order 1..N (serializer emits 1-based ids)
+        for idx, it in enumerate(items, start=1):
+            sel = (ans_by_id.get(idx) or {}).get("selected") or {}
+            ok = _grade_answer(it, sel)
+            results.append({"question_id": idx, "is_correct": bool(ok)})
+            if ok:
+                correct += 1
 
         score_pct = int(round(100 * correct / total)) if total else 0
         xp_delta = correct * 10
@@ -174,11 +200,7 @@ class QuizAttemptView(APIView):
         if xp_delta:
             XpEvent.objects.create(user=request.user, amount=xp_delta, reason=f"Lesson {lesson.id} quiz")
 
-        return Response({
-            "score_pct": score_pct,
-            "xp_delta": xp_delta,
-            "results": results,
-        })
+        return Response({"score_pct": score_pct, "xp_delta": xp_delta, "results": results})
 
 
 class RandomQuizView(APIView):
@@ -187,6 +209,7 @@ class RandomQuizView(APIView):
     def get(self, request):
         """
         Return a mixed quiz across lessons.
+
         Query params:
           size: total questions (default 10)
           category_id: optional filter
@@ -211,40 +234,32 @@ class RandomQuizView(APIView):
         out = []
         qid = 1
         for lesson_id, it in sample:
-            t = (it.get("type") or "").lower()
-
-            # normalize
-            if t == "choose":
-                qtype = "mcq"
-            elif t == "fill_blank":
-                qtype = "fill"
-            elif t in ("tf", "true_false"):
-                qtype = "tf"
-            elif t in ("translate_ro_en", "translate_en_ro", "word_order"):
-                qtype = "build"
-            else:
-                # unknown; skip this item
-                continue
-
+            t = _normalize_type(it.get("type"))
             prompt = it.get("prompt_en") or it.get("prompt_ro") or ""
 
-            payload = {}
-            if qtype == "mcq":
+            if t == "mcq":
                 payload = {"options": it.get("options") or []}
-            elif qtype == "fill":
-                payload = {"blanks": 1}
-            elif qtype == "build":
-                # derive tokens (prefer seed 'tokens', else split the expected answer)
+                qtype = "mcq"
+            elif t == "tf":
+                payload = {}
+                qtype = "tf"
+            elif t == "build":
+                # prefer seed tokens; else derive from main expected answer
                 expected = (
                     it.get("answer_en")
                     or it.get("answer_ro")
                     or it.get("answer")
+                    or it.get("expected")
                     or ""
                 )
                 tokens = it.get("tokens") or expected.split()
-                shuf = tokens[:]  # do not mutate original
+                shuf = tokens[:]
                 random.shuffle(shuf)
                 payload = {"tokens": shuf}
+                qtype = "build"
+            else:
+                payload = {"blanks": 1}
+                qtype = "fill"
 
             out.append({
                 "id": qid,
