@@ -10,6 +10,38 @@ from rest_framework import status
 
 from .models import Lesson, QuizAttempt, XpEvent
 
+import re
+import unicodedata
+
+
+
+_WS_RE = re.compile(r"\s+")
+_PUNCT_RE = re.compile(r"[^\w\s]")  # remove punctuation except letters/digits/space
+
+def strip_diacritics(s: str) -> str:
+    # NFD split + drop combining marks; covers Romanian safely
+    if not isinstance(s, str):
+        s = str(s or "")
+    nfd = unicodedata.normalize("NFD", s)
+    no_marks = "".join(ch for ch in nfd if not unicodedata.combining(ch))
+    # map Romanian special letters that aren’t combining-based in some fonts
+    return (
+        no_marks
+        .replace("ș", "s").replace("Ş", "S").replace("ț", "t").replace("Ţ", "T")
+        .replace("ă", "a").replace("Ă", "A")
+        .replace("â", "a").replace("Â", "A")
+        .replace("î", "i").replace("Î", "I")
+    )
+
+def norm_text(s: str) -> str:
+    s = strip_diacritics(s or "")
+    s = s.lower().strip()
+    s = _PUNCT_RE.sub(" ", s)      # remove punctuation
+    s = _WS_RE.sub(" ", s)         # collapse whitespace
+    return s
+
+
+
 
 def _extract_quiz_items(lesson: Lesson) -> List[Dict[str, Any]]:
     """
@@ -22,30 +54,62 @@ def _extract_quiz_items(lesson: Lesson) -> List[Dict[str, Any]]:
 
 
 def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
-    t = item.get("type")
+    t = (item.get("type") or "").lower()
 
+    # normalize aliases
     if t == "choose":
         t = "mcq"
     if t == "fill_blank":
-        t = "fill"
+        # these can be MCQ if options exist; otherwise it's free text
+        t = "mcq" if item.get("options") else "fill"
 
-    if t == "mcq":
+    # ---------- MCQ ----------
+    if t in ("mcq", "dialogue_reply"):
+        # selected is {"index": int}
         correct_idx = item.get("correct_index")
+        if correct_idx is None:
+            # allow seeds that store a 'correct' option text instead of index
+            options = item.get("options") or []
+            correct_text = item.get("correct")
+            if correct_text is not None and correct_text in options:
+                correct_idx = options.index(correct_text)
         try:
             return int(selected.get("index")) == int(correct_idx)
         except Exception:
             return False
 
-    if t == "tf":
+    # ---------- True/False ----------
+    if t in ("tf", "true_false"):
+        # selected is {"value": bool}
         correct = item.get("correct_bool")
+        if correct is None:
+            correct = item.get("answer_bool")
+        if correct is None:
+            correct = item.get("correct")
         return bool(selected.get("value")) is bool(correct)
 
+    # ---------- Free text fill ----------
     if t == "fill":
+        # selected is {"text": str}
         ans = item.get("answer")
         answers = item.get("answers") or ([] if ans is None else [ans])
-        user_text = (selected.get("text") or "").strip().lower()
-        normalized = [str(a).strip().lower() for a in answers]
-        return user_text in normalized
+        accept = item.get("accept") or []
+        normalized_expected = [norm_text(a) for a in (answers + accept) if a]
+        user_text = norm_text(selected.get("text") or "")
+        return user_text in normalized_expected
+
+    if t in ("translate_ro_en", "translate_en_ro", "word_order"):
+        expected = (
+            item.get("answer_en")
+            or item.get("answer_ro")
+            or item.get("answer")
+            or item.get("expected")
+        )
+        accept = item.get("accept") or []
+        user_text = norm_text(selected.get("text") or "")
+        normalized_expected = [norm_text(expected or "")]
+        normalized_expected += [norm_text(a) for a in accept]
+        return user_text in normalized_expected
 
     return False
 
@@ -147,17 +211,19 @@ class RandomQuizView(APIView):
         out = []
         qid = 1
         for lesson_id, it in sample:
-            t = it.get("type")
+            t = (it.get("type") or "").lower()
             if t == "choose":
                 t = "mcq"
             if t == "fill_blank":
-                t = "fill"
+                t = "mcq" if it.get("options") else "fill"
+
             payload = {}
             if t == "mcq":
                 payload = {"options": it.get("options") or []}
             elif t == "fill":
                 payload = {"blanks": 1}
-            elif t == "tf":
+            elif t in ("tf", "true_false"):
+                t = "tf"
                 payload = {}
             out.append({
                 "id": qid,

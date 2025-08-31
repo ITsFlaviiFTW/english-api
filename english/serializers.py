@@ -5,6 +5,9 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from .models import Category, Lesson
 
+import random
+
+
 User = get_user_model()
 
 
