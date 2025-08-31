@@ -212,24 +212,45 @@ class RandomQuizView(APIView):
         qid = 1
         for lesson_id, it in sample:
             t = (it.get("type") or "").lower()
+
+            # normalize
             if t == "choose":
-                t = "mcq"
-            if t == "fill_blank":
-                t = "mcq" if it.get("options") else "fill"
+                qtype = "mcq"
+            elif t == "fill_blank":
+                qtype = "fill"
+            elif t in ("tf", "true_false"):
+                qtype = "tf"
+            elif t in ("translate_ro_en", "translate_en_ro", "word_order"):
+                qtype = "build"
+            else:
+                # unknown; skip this item
+                continue
+
+            prompt = it.get("prompt_en") or it.get("prompt_ro") or ""
 
             payload = {}
-            if t == "mcq":
+            if qtype == "mcq":
                 payload = {"options": it.get("options") or []}
-            elif t == "fill":
+            elif qtype == "fill":
                 payload = {"blanks": 1}
-            elif t in ("tf", "true_false"):
-                t = "tf"
-                payload = {}
+            elif qtype == "build":
+                # derive tokens (prefer seed 'tokens', else split the expected answer)
+                expected = (
+                    it.get("answer_en")
+                    or it.get("answer_ro")
+                    or it.get("answer")
+                    or ""
+                )
+                tokens = it.get("tokens") or expected.split()
+                shuf = tokens[:]  # do not mutate original
+                random.shuffle(shuf)
+                payload = {"tokens": shuf}
+
             out.append({
                 "id": qid,
                 "lesson_id": lesson_id,
-                "prompt": it.get("prompt_en") or it.get("prompt_ro") or "",
-                "qtype": t,
+                "prompt": prompt,
+                "qtype": qtype,
                 "payload": payload,
             })
             qid += 1
