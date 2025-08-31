@@ -106,34 +106,69 @@ class LessonDetailSerializer(serializers.ModelSerializer):
         items = ((obj.content or {}).get("quiz") or {}).get("items") or []
         out, qid = [], 1
         for it in items:
-            t = it.get("type")
+            t = (it.get("type") or "").lower()
+
             if t == "choose":
-                out.append({
-                    "id": qid,
-                    "prompt": it.get("prompt_en", ""),
-                    "qtype": "mcq",
-                    "payload": {"options": it.get("options") or []},
-                })
-            elif t == "fill_blank":
-                out.append({
-                    "id": qid,
-                    "prompt": it.get("prompt_en", ""),
-                    "qtype": "fill",
-                    "payload": {"blanks": 1},
-                })
+                t = "mcq"
+
+            if t == "fill_blank":
+                tokens = it.get("tokens") or []
+                if tokens:  # treat tiled fills as build questions
+                    shuf = tokens[:]
+                    random.shuffle(shuf)
+                    out.append({
+                        "id": qid,
+                        "prompt": it.get("prompt_en") or it.get("prompt_ro") or "",
+                        "qtype": "build",
+                        "payload": {"tokens": shuf},
+                    })
+                elif it.get("options"):
+                    out.append({
+                        "id": qid,
+                        "prompt": it.get("prompt_en") or it.get("prompt_ro") or "",
+                        "qtype": "mcq",
+                        "payload": {"options": it.get("options") or []},
+                    })
+                else:
+                    out.append({
+                        "id": qid,
+                        "prompt": it.get("prompt_en") or it.get("prompt_ro") or "",
+                        "qtype": "fill",
+                        "payload": {"blanks": 1},
+                    })
+
             elif t in ("translate_ro_en", "translate_en_ro", "word_order"):
+                expected = (it.get("answer_en") or it.get("answer_ro") or it.get("answer") or "")
+                tokens = it.get("tokens") or expected.split()
+                shuf = tokens[:]
+                random.shuffle(shuf)
                 prompt = it.get("prompt_en") or it.get("prompt_ro") or ""
-                out.append({"id": qid, "prompt": prompt, "qtype": "fill", "payload": {"blanks": 1}})
-            elif t == "dialogue_reply":
                 out.append({
                     "id": qid,
-                    "prompt": it.get("prompt_en", ""),
+                    "prompt": prompt,
+                    "qtype": "build",
+                    "payload": {"tokens": shuf},
+                })
+
+            elif t in ("dialogue_reply", "mcq"):
+                out.append({
+                    "id": qid,
+                    "prompt": it.get("prompt_en") or it.get("prompt_ro") or "",
                     "qtype": "mcq",
                     "payload": {"options": it.get("options") or []},
                 })
-            elif t == "tf":
-                out.append({"id": qid, "prompt": it.get("prompt_en", ""), "qtype": "tf", "payload": {}})
+
+            elif t in ("tf", "true_false"):
+                out.append({
+                    "id": qid,
+                    "prompt": it.get("prompt_en") or it.get("prompt_ro") or "",
+                    "qtype": "tf",
+                    "payload": {},
+                })
             else:
+                qid += 1
                 continue
+
             qid += 1
+
         return out

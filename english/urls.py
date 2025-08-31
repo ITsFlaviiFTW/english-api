@@ -4,7 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .views import HealthView, RegisterView, LoginView, MeView, MeSummaryView
 from .views_catalog import CategoriesView, CategoryDetailView, CategoryLessonsView, LessonDetailView
 from .views_progress import ProgressUpsertView
-from .views_quiz import QuizAttemptView, RandomQuizView
+from .views_quiz import QuizAttemptView, RandomQuizView, RandomQuizAttemptView
 
 urlpatterns = [
     path("health/", HealthView.as_view()),
@@ -25,4 +25,5 @@ urlpatterns = [
     path("progress/", ProgressUpsertView.as_view()),
     path("quiz-attempts/", QuizAttemptView.as_view()),
     path("quiz/random/", RandomQuizView.as_view()),
+    path("quiz/random/attempts/", RandomQuizAttemptView.as_view()),
 ]

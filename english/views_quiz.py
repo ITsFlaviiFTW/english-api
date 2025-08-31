@@ -221,10 +221,12 @@ class RandomQuizView(APIView):
         if category_id:
             qs = qs.filter(category_id=category_id)
 
-        pool: List[Tuple[int, Dict[str, Any]]] = []
+        # Build pool as (lesson_id, 1-based item_index, item)
+        pool: List[Tuple[int, int, Dict[str, Any]]] = []
         for lesson in qs.order_by("-created_at")[:100]:
-            for it in _extract_quiz_items(lesson):
-                pool.append((lesson.id, it))
+            items = _extract_quiz_items(lesson)
+            for idx, it in enumerate(items, start=1):
+                pool.append((lesson.id, idx, it))
 
         if not pool:
             return Response({"items": []})
@@ -233,7 +235,7 @@ class RandomQuizView(APIView):
 
         out = []
         qid = 1
-        for lesson_id, it in sample:
+        for lesson_id, item_index, it in sample:
             t = _normalize_type(it.get("type"))
             prompt = it.get("prompt_en") or it.get("prompt_ro") or ""
 
@@ -264,6 +266,7 @@ class RandomQuizView(APIView):
             out.append({
                 "id": qid,
                 "lesson_id": lesson_id,
+                "item_index": item_index,  # from pool; no undefined 'lesson' here
                 "prompt": prompt,
                 "qtype": qtype,
                 "payload": payload,
@@ -271,3 +274,62 @@ class RandomQuizView(APIView):
             qid += 1
 
         return Response({"items": out})
+
+    
+
+
+class RandomQuizAttemptView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        entries = request.data.get("answers") or []
+        if not isinstance(entries, list) or not entries:
+            return Response({"detail": "answers[] required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        by_lesson: Dict[int, List[Dict[str, Any]]] = {}
+        for e in entries:
+            try:
+                lid = int(e.get("lesson_id"))
+                by_lesson.setdefault(lid, []).append(e)
+            except Exception:
+                continue
+
+        total = 0
+        correct = 0
+        results: List[Dict[str, Any]] = []
+
+        for lesson_id, group in by_lesson.items():
+            lesson = get_object_or_404(Lesson, pk=lesson_id)
+            items = _extract_quiz_items(lesson)
+
+            t_this = 0
+            c_this = 0
+            for e in group:
+                qid = int(e.get("qid"))
+                idx = int(e.get("item_index"))  # 1-based within that lesson's items
+                selected = e.get("selected") or {}
+                it = items[idx - 1] if 1 <= idx <= len(items) else None
+                ok = _grade_answer(it, selected) if it else False
+                results.append({"qid": qid, "is_correct": bool(ok)})
+                t_this += 1
+                if ok:
+                    c_this += 1
+
+            total += t_this
+            correct += c_this
+
+            if t_this:
+                QuizAttempt.objects.create(
+                    user=request.user,
+                    lesson=lesson,
+                    total_questions=t_this,
+                    correct_answers=c_this,
+                )
+
+        xp_delta = correct * 10
+        if xp_delta:
+            XpEvent.objects.create(user=request.user, amount=xp_delta, reason="Random quiz")
+
+        score_pct = int(round(100 * correct / total)) if total else 0
+        return Response({"score_pct": score_pct, "xp_delta": xp_delta, "results": results})  
