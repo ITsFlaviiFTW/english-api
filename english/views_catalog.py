@@ -10,14 +10,13 @@ class CategoriesView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
         qs = Category.objects.all().order_by("title")
-        return Response({"results": CategorySerializer(qs, many=True).data})
+        return Response({"results": CategorySerializer(qs, many=True, context={"request": request}).data})
 
 class CategoryDetailView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request, slug):
         cat = get_object_or_404(Category, slug=slug)
-        return Response(CategorySerializer(cat).data)
-
+        return Response(CategorySerializer(cat, context={"request": request}).data)
 class CategoryLessonsView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request, slug):

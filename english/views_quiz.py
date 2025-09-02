@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import Lesson, QuizAttempt, XpEvent
+from .models import Lesson, QuizAttempt, XpEvent, LessonProgress
 
 # ---------- normalization helpers ----------
 
@@ -148,15 +148,6 @@ class QuizAttemptView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        """
-        Input:
-          {
-            "lesson_id": int,
-            "answers": [ { "question_id": int, "selected": {...} } ]
-          }
-        Output:
-          { "score_pct": int, "xp_delta": int, "results": [{question_id,is_correct}] }
-        """
         lesson_id = request.data.get("lesson_id")
         answers = request.data.get("answers") or []
 
@@ -168,7 +159,6 @@ class QuizAttemptView(APIView):
         if not items:
             return Response({"detail": "Lesson has no quiz items"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Index answers by qid
         ans_by_id: Dict[int, Dict[str, Any]] = {}
         for a in answers:
             try:
@@ -180,7 +170,6 @@ class QuizAttemptView(APIView):
         correct = 0
         total = len(items)
 
-        # Grade in order 1..N (serializer emits 1-based ids)
         for idx, it in enumerate(items, start=1):
             sel = (ans_by_id.get(idx) or {}).get("selected") or {}
             ok = _grade_answer(it, sel)
@@ -199,6 +188,11 @@ class QuizAttemptView(APIView):
         )
         if xp_delta:
             XpEvent.objects.create(user=request.user, amount=xp_delta, reason=f"Lesson {lesson.id} quiz")
+
+        # NEW: update per-lesson progress if improved
+        lp, _ = LessonProgress.objects.get_or_create(user=request.user, lesson=lesson)
+        lp.percent = max(lp.percent or 0, score_pct)
+        lp.save()
 
         return Response({"score_pct": score_pct, "xp_delta": xp_delta, "results": results})
 
@@ -307,7 +301,7 @@ class RandomQuizAttemptView(APIView):
             c_this = 0
             for e in group:
                 qid = int(e.get("qid"))
-                idx = int(e.get("item_index"))  # 1-based within that lesson's items
+                idx = int(e.get("item_index"))  # 1-based
                 selected = e.get("selected") or {}
                 it = items[idx - 1] if 1 <= idx <= len(items) else None
                 ok = _grade_answer(it, selected) if it else False
@@ -320,16 +314,24 @@ class RandomQuizAttemptView(APIView):
             correct += c_this
 
             if t_this:
+                # record per-lesson attempt
                 QuizAttempt.objects.create(
                     user=request.user,
                     lesson=lesson,
                     total_questions=t_this,
                     correct_answers=c_this,
                 )
+                # update per-lesson progress if improved
+                pct = int(round(100 * c_this / t_this))
+                lp, _ = LessonProgress.objects.get_or_create(user=request.user, lesson=lesson)
+                lp.percent = max(lp.percent or 0, pct)
+                lp.save()
 
         xp_delta = correct * 10
         if xp_delta:
             XpEvent.objects.create(user=request.user, amount=xp_delta, reason="Random quiz")
 
         score_pct = int(round(100 * correct / total)) if total else 0
-        return Response({"score_pct": score_pct, "xp_delta": xp_delta, "results": results})  
+        return Response({"score_pct": score_pct, "xp_delta": xp_delta, "results": results})
+
+

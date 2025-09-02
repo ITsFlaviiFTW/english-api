@@ -3,7 +3,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
-from .models import Category, Lesson
+from .models import Category, Lesson, LessonProgress
+from django.db.models import Avg
 
 import random
 
@@ -55,9 +56,23 @@ class RegisterSerializer(serializers.Serializer):
 # --- Catalog serializers -----------------------------------------------------
 
 class CategorySerializer(serializers.ModelSerializer):
+    completion_percentage = serializers.SerializerMethodField()  
+
     class Meta:
         model = Category
         fields = ["id", "slug", "title", "description", "emoji", "completion_percentage"]
+
+    def get_completion_percentage(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return 0
+        agg = (
+            LessonProgress.objects
+            .filter(user=user, lesson__category=obj)
+            .aggregate(avg=Avg("percent"))
+        )
+        return int(round(agg["avg"] or 0))
 
 
 class LessonListSerializer(serializers.ModelSerializer):
