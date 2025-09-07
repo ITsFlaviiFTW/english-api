@@ -6,17 +6,16 @@ from typing import Any, Dict, List, Tuple
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
-from rest_framework.views import APIView
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework.views import APIView
 
 from .models import Lesson, QuizAttempt, XpEvent, LessonProgress
 
-# ---------- normalization helpers ----------
-
 _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^\w\s]")  # remove punctuation except letters/digits/space
+
 
 def strip_diacritics(s: str) -> str:
     if not isinstance(s, str):
@@ -32,12 +31,14 @@ def strip_diacritics(s: str) -> str:
         .replace("î", "i").replace("Î", "I")
     )
 
+
 def norm_text(s: str) -> str:
     s = strip_diacritics(s or "")
     s = s.lower().strip()
     s = _PUNCT_RE.sub(" ", s)
     s = _WS_RE.sub(" ", s)
     return s
+
 
 def _normalize_type(t: str) -> str:
     t = (t or "").lower()
@@ -51,24 +52,23 @@ def _normalize_type(t: str) -> str:
         return "build"
     return t
 
+
 def _extract_quiz_items(lesson: Lesson) -> List[Dict[str, Any]]:
     content = lesson.content or {}
     quiz = content.get("quiz") or {}
     return quiz.get("items") or []
 
+
 def _expected_texts(item: Dict[str, Any]) -> List[str]:
     vals: List[str] = []
-    # primary fields
     for k in ("answer_en", "answer_ro", "answer", "expected", "solution"):
         v = item.get(k)
         if isinstance(v, str) and v:
             vals.append(v)
-    # alternates
     for k in ("answers", "accept", "accept_en", "answer_variants"):
         v = item.get(k)
         if isinstance(v, list):
             vals.extend([x for x in v if isinstance(x, str) and x])
-    # normalize & dedupe
     out, seen = [], set()
     for s in vals:
         ns = norm_text(s)
@@ -77,22 +77,17 @@ def _expected_texts(item: Dict[str, Any]) -> List[str]:
             out.append(ns)
     return out
 
+
 def _tokens_to_text(selected: Dict[str, Any]) -> str:
-    """
-    Frontend may send:
-      - {"tokens": ["There", "is", "a", "lamp", "on", "the", "table", "."]}
-      - or {"text": "There is a lamp on the table."}
-    Convert tokens to a single string when present.
-    """
     toks = selected.get("tokens")
     if isinstance(toks, list) and toks:
         return " ".join(str(t) for t in toks)
     return selected.get("text") or ""
 
+
 def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
     t = _normalize_type(item.get("type"))
 
-    # MCQ
     if t == "mcq":
         correct_idx = (
             item.get("correct_index")
@@ -109,7 +104,6 @@ def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
         except Exception:
             return False
 
-    # True/False
     if t == "tf":
         correct = item.get("correct_bool")
         if correct is None:
@@ -118,9 +112,7 @@ def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
             correct = item.get("correct")
         return bool(selected.get("value")) is bool(correct)
 
-    # Fill (free text)
     if t == "fill":
-        # selected: {"text": "..."}
         ans = item.get("answer")
         answers = item.get("answers") or ([] if ans is None else [ans])
         accept = item.get("accept") or []
@@ -128,9 +120,7 @@ def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
         cand = norm_text(selected.get("text") or "")
         return cand in expected_norms
 
-    # Build / Translate / Word-order (tile UI or free text)
     if t == "build":
-        # Accept tokens or text
         cand_raw = _tokens_to_text(selected)
         cand_norm = norm_text(cand_raw)
         if not cand_norm:
@@ -138,10 +128,8 @@ def _grade_answer(item: Dict[str, Any], selected: Any) -> bool:
         expected_norms = _expected_texts(item)
         return cand_norm in expected_norms
 
-    # Unknown type -> mark incorrect
     return False
 
-# ---------- views ----------
 
 class QuizAttemptView(APIView):
     permission_classes = [IsAuthenticated]
@@ -189,7 +177,6 @@ class QuizAttemptView(APIView):
         if xp_delta:
             XpEvent.objects.create(user=request.user, amount=xp_delta, reason=f"Lesson {lesson.id} quiz")
 
-        # NEW: update per-lesson progress if improved
         lp, _ = LessonProgress.objects.get_or_create(user=request.user, lesson=lesson)
         lp.percent = max(lp.percent or 0, score_pct)
         lp.save()
@@ -201,13 +188,6 @@ class RandomQuizView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """
-        Return a mixed quiz across lessons.
-
-        Query params:
-          size: total questions (default 10)
-          category_id: optional filter
-        """
         size = int(request.query_params.get("size", 10))
         category_id = request.query_params.get("category_id")
 
@@ -215,7 +195,6 @@ class RandomQuizView(APIView):
         if category_id:
             qs = qs.filter(category_id=category_id)
 
-        # Build pool as (lesson_id, 1-based item_index, item)
         pool: List[Tuple[int, int, Dict[str, Any]]] = []
         for lesson in qs.order_by("-created_at")[:100]:
             items = _extract_quiz_items(lesson)
@@ -240,7 +219,6 @@ class RandomQuizView(APIView):
                 payload = {}
                 qtype = "tf"
             elif t == "build":
-                # prefer seed tokens; else derive from main expected answer
                 expected = (
                     it.get("answer_en")
                     or it.get("answer_ro")
@@ -260,7 +238,7 @@ class RandomQuizView(APIView):
             out.append({
                 "id": qid,
                 "lesson_id": lesson_id,
-                "item_index": item_index,  # from pool; no undefined 'lesson' here
+                "item_index": item_index,
                 "prompt": prompt,
                 "qtype": qtype,
                 "payload": payload,
@@ -268,8 +246,6 @@ class RandomQuizView(APIView):
             qid += 1
 
         return Response({"items": out})
-
-    
 
 
 class RandomQuizAttemptView(APIView):
@@ -314,14 +290,12 @@ class RandomQuizAttemptView(APIView):
             correct += c_this
 
             if t_this:
-                # record per-lesson attempt
                 QuizAttempt.objects.create(
                     user=request.user,
                     lesson=lesson,
                     total_questions=t_this,
                     correct_answers=c_this,
                 )
-                # update per-lesson progress if improved
                 pct = int(round(100 * c_this / t_this))
                 lp, _ = LessonProgress.objects.get_or_create(user=request.user, lesson=lesson)
                 lp.percent = max(lp.percent or 0, pct)
@@ -333,5 +307,3 @@ class RandomQuizAttemptView(APIView):
 
         score_pct = int(round(100 * correct / total)) if total else 0
         return Response({"score_pct": score_pct, "xp_delta": xp_delta, "results": results})
-
-

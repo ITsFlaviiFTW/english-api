@@ -1,3 +1,4 @@
+# english/urls.py
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -16,9 +17,9 @@ urlpatterns = [
     path("me/summary/", MeSummaryView.as_view()),
 
     # Catalog
-    path("categories/", CategoriesView.as_view()),
+    path("categories/", CategoriesView.as_view()),                         # returns ARRAY
     path("categories/<slug:slug>/", CategoryDetailView.as_view()),
-    path("categories/<slug:slug>/lessons/", CategoryLessonsView.as_view()),
+    path("categories/<slug:slug>/lessons/", CategoryLessonsView.as_view()),# returns ARRAY
     path("lessons/<int:pk>/", LessonDetailView.as_view()),
 
     # Progress + Quiz

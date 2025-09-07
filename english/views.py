@@ -17,7 +17,6 @@ from .serializers import RegisterSerializer, UserSerializer
 
 class HealthView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, _):
         return Response({"ok": True})
 
@@ -29,7 +28,6 @@ def _tokens_for_user(user):
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
-
     def post(self, request):
         s = RegisterSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -43,7 +41,6 @@ class RegisterView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
-
     def post(self, request):
         username = request.data.get("username", "")
         password = request.data.get("password", "")
@@ -56,14 +53,12 @@ class LoginView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
-
     def get(self, request):
         return Response(UserSerializer(request.user).data)
 
 
 class MeSummaryView(APIView):
     permission_classes = [IsAuthenticated]
-
     def get(self, request):
         user = request.user
 

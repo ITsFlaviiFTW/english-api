@@ -2,12 +2,12 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework import serializers
-from .models import Category, Lesson, LessonProgress
 from django.db.models import Avg
+from rest_framework import serializers
+
+from .models import Category, Lesson, LessonProgress
 
 import random
-
 
 User = get_user_model()
 
@@ -53,10 +53,10 @@ class RegisterSerializer(serializers.Serializer):
         )
 
 
-# --- Catalog serializers -----------------------------------------------------
+# ----- Catalog -----
 
 class CategorySerializer(serializers.ModelSerializer):
-    completion_percentage = serializers.SerializerMethodField()  
+    completion_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
@@ -88,7 +88,10 @@ class LessonDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Lesson
-        fields = ["id", "title", "difficulty", "category", "word_count", "body_md", "flashcards", "questions"]
+        fields = [
+            "id", "title", "difficulty", "category", "word_count",
+            "body_md", "flashcards", "questions"
+        ]
 
     def get_body_md(self, obj: Lesson) -> str:
         c = obj.content or {}
